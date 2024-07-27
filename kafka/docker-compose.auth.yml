@@ -1,0 +1,43 @@
+services:
+  kafka1:
+    image: 'registry.cn-hangzhou.aliyuncs.com/qingmou/kafka:3.7.1'
+    restart: always
+    ports:
+      - '9093:9093'
+      - '24187:24187'
+    environment:
+      - KAFKA_CFG_NODE_ID=1
+      # 允许使用PLAINTEXT协议(镜像中默认为关闭,需要手动开启)
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      # 关闭自动创建 topic 功能
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=false
+      # 记录保留时间
+      - KAFKA_CFG_LOG_RETENTION_HOURS=72
+      - KAFKA_CFG_LOG_RETENTION_BYTES=10737418240
+      # SASL
+      - KAFKA_CFG_SASL_ENABLED_MECHANISMS=SCRAM-SHA-256
+      # 定义安全协议
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:SASL_PLAINTEXT,CONTROLLER:PLAINTEXT
+      # 定义kafka服务端socket监听端口
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:24187,CONTROLLER://:9093
+      # 定义外网访问地址（宿主机ip地址和端口）
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka.zjydit.com:24187
+      # 配置账号密码
+      - KAFKA_CERTIFICATE_PASSWORD=Yundi@9098
+      - KAFKA_CLIENT_USERS=yundi
+      - KAFKA_CLIENT_PASSWORDS=Yundi@9098
+      - KAFKA_INTER_BROKER_USER=yundi
+      - KAFKA_INTER_BROKER_PASSWORD=Yundi@9098
+       # 允许使用kraft，即Kafka替代Zookeeper
+      - KAFKA_ENABLE_KRAFT=yes
+      # kafka角色，做broker，也要做controller
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      # 指定供外部使用的控制类请求信息
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      # 使用Kafka时的集群id，集群内的Kafka都要用这个id做初始化，生成一个UUID即可
+      - KAFKA_KRAFT_CLUSTER_ID=LelM2dIFQkiUFvXCEcqRWA
+      # 集群地址 1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka1:9093
+    volumes:
+      - /etc/localtime:/etc/localtime
+      - ./kafka:/bitnami/kafka
