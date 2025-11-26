@@ -1,0 +1,205 @@
+# ========================
+# 自定义网络配置
+# ========================
+networks:
+  loki:  # 创建专用网络确保服务隔离
+    driver: bridge
+
+services:
+  # ========================
+  # Loki 读取组件（查询节点）
+  # ========================
+  read:
+    image: grafana/loki:latest
+    # 容器名
+    container_name: loki-read
+    user: root
+    # 指定read模式启动
+    command: "-config.file=/etc/loki/config.yaml -target=read"  # 指定角色为读取节点
+    ports:
+      - 3100    # 映射外部访问端口
+      - 7946    # memberlist 通信端口
+      - 9095    # 指标暴露端口（未映射到宿主机）
+    volumes:
+      - ./loki-config.yaml:/etc/loki/config.yaml  # 共享配置文件
+    healthcheck:  # 健康检查策略
+      test: [
+        "CMD-SHELL", # 使用 shell 执行命令
+        "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1"
+        ]
+      interval: 10s # 每10秒检查一次
+      timeout: 5s   # 超时时间5秒
+      retries: 5    # 最多重试5次
+    depends_on: # 依赖Minio
+      - minio
+    # 定义网络锚点, 后续直接复用
+    networks: &loki-dns  # 网络别名锚点
+      loki:
+        aliases:
+          - loki  # 其他服务可通过 loki 域名访问
+
+  # ========================
+  # Loki 写入组件（接收节点）
+  # ========================
+  write:
+    image: grafana/loki:latest
+    user: root
+    # 容器名
+    container_name: loki-write
+    # 指定write模式启动
+    command: "-config.file=/etc/loki/config.yaml -target=write"
+    ports:
+      - 3100    # 与读节点区分端口
+      - 7946    # memberlist 通信端口
+      - 9095    # 指标暴露端口（未映射到宿主机）
+    volumes:
+      - ./loki-config.yaml:/etc/loki/config.yaml
+    healthcheck: # 健康检查策略
+      test: [
+        "CMD-SHELL", # 使用 shell 执行命令
+        "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1"
+        ]
+      interval: 10s # 每10秒检查一次
+      timeout: 5s   # 超时时间5秒
+      retries: 5    # 最多重试5次
+    depends_on: # 依赖Minio
+      - minio
+    networks:
+      <<: *loki-dns  # 复用网络别名配置
+
+  # ========================
+  # Loki 后台处理组件
+  # ========================
+  backend:
+    image: grafana/loki:latest
+    user: root
+    # 容器名
+    container_name: loki-backend
+    command: "-config.file=/etc/loki/config.yaml -target=backend -legacy-read-mode=false"
+    ports:
+      - 3100    # 默认API端口（未映射到宿主机）
+      - 7946    # memberlist端口
+    volumes:
+      - ./loki-config.yaml:/etc/loki/config.yaml
+    networks:
+      - loki
+
+  # ========================
+  # 日志采集组件（原Grafana Agent）
+  # ========================
+  alloy:
+    image: grafana/alloy:latest
+    # 容器名
+    container_name: alloy
+    command: run --server.http.listen-addr=0.0.0.0:12345 --storage.path=/var/lib/alloy/data /etc/alloy/config.alloy
+    ports:
+      - 12345   # Web UI端口
+    volumes:
+      # 将程序产生的*.log,*.gzd的父目录映射到alloy, 这样才能探测到
+      - ./logs:/data/alg/flog/logs
+      - ./alloy-local-config.yaml:/etc/alloy/config.alloy:ro  # 采集配置
+      - /var/run/docker.sock:/var/run/docker.sock  # 挂载docker socket, 如果不挂载这个, 那么没法获取到容器的日志
+    networks:
+      - loki
+
+  # ========================
+  # 对象存储服务（S3兼容）
+  # ========================
+  minio:
+    # 用minioz最后一个带控制台UI的, 新版本的开源协议原因移除了控制台
+    image: minio/minio:RELEASE.2025-05-24T17-08-30Z
+    # 容器名
+    container_name: minio
+    entrypoint:  # 初始化存储目录
+      - sh          
+      - -euc        # 执行脚本的参数：e(报错退出) u(未定义变量报错) c(执行后续命令)
+      - |           # 多行脚本开始, minio创建目录挂载日志
+        mkdir -p /data/loki-data && \
+        mkdir -p /data/loki-ruler && \
+        minio server /data --console-address :9001
+    environment:
+      - MINIO_ROOT_USER=whiteBrocade        # 用户名（与Loki配置对应）
+      - MINIO_ROOT_PASSWORD=whiteBrocade    # 密码（需加密处理）
+      - MINIO_PROMETHEUS_AUTH_TYPE=public   # 开放指标
+    volumes:
+      - ./minio:/data  # 持久化存储路径
+    ports:
+      - 9000    # API端口
+      - 9001    # UI端口
+    networks:
+      - loki
+
+  # ========================
+  # 可视化平台
+  # ========================
+  grafana:
+    image: grafana/grafana-enterprise:latest
+    # 容器名
+    container_name: grafana
+    # 数据持久化
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true  # 开启匿名访问（生产环境应关闭）
+      # 设置 Grafana 的管理员（admin）账户的初始密码为admin 
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # 设置Grafana的语言为简体中文
+      - GF_VIEWER_LANGUAGE=zh-Hans
+      # 设置 Grafana 的默认用户界面主题为暗黑模式
+      - GF_USERS_DEFAULT_THEME=dark
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+    entrypoint:  # 覆盖默认启动命令, 动态创建Loki数据源配置
+      - sh
+      - -euc         # 执行脚本的参数
+      - |            # 多行脚本开始
+        mkdir -p /etc/grafana/provisioning/datasources
+        cat <<EOF > /etc/grafana/provisioning/datasources/ds.yaml
+        apiVersion: 1
+        # 初始化Loki数据源
+        datasources:
+          - name: Loki     # 显示在UI中的名称
+            type: loki     # 数据源类型
+            access: proxy  # 通过Grafana服务代理访问
+            url: http://gateway:3100  # 通过NG网关访问
+            jsonData:
+              httpHeaderName1: "X-Scope-OrgID"  # # 多租户头部名称
+            secureJsonData:
+              httpHeaderValue1: "tenant1"  # 租户ID
+        EOF
+        /run.sh
+    ports:
+      - 3000    # Web访问端口
+    depends_on: # 依赖网关服务
+      - gateway
+    networks:
+      - loki
+
+  # ========================
+  # API网关（流量路由）
+  # ========================
+  gateway:
+    image: nginx:latest
+    # 容器名
+    container_name: nginx
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    ports:
+      - 3000:3000       # Grafana UI
+      - 3100:3100   # Loki统一入口端口
+      - 3101:3101   # read 端点
+      - 3102:3102   # write 端点
+      - 9001:9001   # Minio UI
+      - 12345:12345 # Alloy UI
+    healthcheck: # 健康检查策略
+      test: [
+        "CMD", 
+        "service", 
+        "nginx", 
+        "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - read
+      - write
+      - alloy
+    networks:
+      - loki
