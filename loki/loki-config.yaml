@@ -1,0 +1,74 @@
+# ========================
+# Loki 服务核心配置
+# ========================
+server:
+  http_listen_address: 0.0.0.0    # 监听所有网络接口
+  http_listen_port: 3100           # 默认 Loki 服务端口
+
+# ========================
+# 集群节点发现与通信配置
+# ========================
+memberlist:
+  join_members: ["read", "write", "backend"]  # 需要连接的初始节点列表（建议使用IP或DNS）
+  dead_node_reclaim_time: 30s     # 节点标记为死亡后保留元数据的时间
+  gossip_to_dead_nodes_time: 15s  # 停止向死亡节点发送gossip包的时间
+  left_ingesters_timeout: 30s     # 离开节点清理超时时间
+  bind_addr: ['0.0.0.0']          # 集群通信绑定地址
+  bind_port: 7946                 # 集群通信端口
+  gossip_interval: 2s             # 节点状态同步间隔
+
+# ========================
+# 数据存储架构配置
+# ========================
+schema_config:
+  configs:
+    - from: 2023-01-01            # 配置生效起始时间
+      store: tsdb                 # 使用 Prometheus TSDB 存储
+      object_store: s3            # 对象存储类型
+      schema: v13                 # 存储格式版本
+      index:
+        prefix: index_            # 索引文件前缀
+        period: 24h               # 索引文件切割周期
+
+# ========================
+# 公共基础配置
+# ========================
+common:
+  path_prefix: /loki             # 存储路径前缀
+  replication_factor: 1          # 数据副本数（生产环境建议 >=3）
+  compactor_address: http://backend:3100  # 压缩组件地址
+
+  # 对象存储配置
+  storage:
+    # S3对象存储
+    s3:
+      endpoint: minio:9000         # S3兼容存储地址
+      insecure: true              # 禁用HTTPS（生产环境不推荐）
+      bucketnames: loki-data      # 主数据存储桶
+      access_key_id: whiteBrocade         # 访问密钥（建议使用环境变量）
+      secret_access_key: whiteBrocade  # 密钥（存在安全隐患）
+      s3forcepathstyle: true      # 强制路径访问模式
+    # 本地文件存储(由于是容器形式启动loki, 这里指的是容器内系统)
+    #filesystem:
+    #  # 数据保存的地方
+    #  chunks_directory: /tmp/loki/chunks
+    #  # 规则保存的地方
+    #  rules_directory: /tmp/loki/rules
+  # 一致性哈希环配置
+  ring:
+    kvstore:
+      store: memberlist           # 使用memberlist实现分布式哈希环
+
+# ========================
+# 告警规则配置
+# ========================
+ruler:
+  storage:
+    s3:
+      bucketnames: loki-ruler     # 独立存储告警规则的桶
+
+# ========================
+# 数据压缩配置
+# ========================
+compactor:
+  working_directory: /tmp/compactor  # 临时工作目录（建议使用持久化存储）
