@@ -1,0 +1,122 @@
+// ========================
+// 实时调试
+// ========================
+livedebugging {
+  enabled = true
+}
+
+// ========================
+// Docker容器日志发现和采集
+// ========================
+// Docker 容器发现配置
+discovery.docker "flog_scrape" {
+    // 连接 Docker daemon 的地址（Unix 套接字）
+    host             = "unix:///var/run/docker.sock"  
+    // 每5s抓取Docker信息日志
+    refresh_interval = "5s"  
+}
+
+// 主要用于服务发现阶段对发现的目标（如容器、节点等）的元数据标签进行预处理。当通过服务发现机制（如基于 Docker、Kubernetes 等）发现一系列目标时，这些目标会带有各种元数据标签，这里可以对这些原始标签进行修改、添加、删除等操作，使得标签更加符
+discovery.relabel "flog_scrape" {
+    // 初始空目标列表（自动从上游发现discovery.docker "flog_scrape"填充）
+    targets = []  
+
+    // 提取容器名称
+    rule {
+        // 原始元数据标签（来自 Docker 的属性）
+        source_labels = ["__meta_docker_container_name"]  
+        // 正则提取容器名称（去除路径前缀）
+        regex         = "/(.*)"  
+        // 生成新标签 container 存储处理结果
+        target_label  = "container"
+    }
+    
+    // 提取项目名
+    rule {
+        //
+        source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+        regex         = "(.*)"  
+        target_label  = "project"     
+    }       
+}
+
+// Loki Docker 日志采集配置
+loki.source.docker "flog_scrape" {
+    // Docker 连接配置（需与发现模块一致）
+    host             = "unix:///var/run/docker.sock"  
+    // 要从中读取日志的容器列表, 关联发现模块获取的目标列表
+    targets          = discovery.docker.flog_scrape.targets  
+    // 日志转发目的地（指向写入模块）
+    forward_to       = [loki.write.default.receiver]  
+    // 应用标签重写规则
+    relabel_rules    = discovery.relabel.flog_scrape.rules  
+    // 目标同步频率（与发现模块同步）
+    refresh_interval = "5s"  
+}
+
+// ========================
+// *.log文件匹配和采集
+// ========================
+// 本地*.log文件匹配
+local.file_match "local_log" {
+  path_targets = [
+    {__path__ = "/data/alg/flog/logs/log/*.log"},
+  ]
+}
+
+// ========================
+// 本地*.log文件采集
+// ========================
+loki.source.file "local_log" {
+  // 关联发现模块获取的目标列表, 关联到本地机器日志匹配
+  targets    = local.file_match.local_log.targets
+  // 日志转发目的地（指向写入模块）
+  forward_to = [loki.write.default.receiver]
+}
+
+// ========================
+// *.gz文件匹配和采集
+// ========================
+// 本地*.gz文件匹配
+local.file_match "local_log_gz" {
+  path_targets = [
+    {__path__ = "/data/alg/flog/logs/gz/*.gz"},
+  ]
+}
+
+// 本地*.log文件采集
+loki.source.file "local_log_gz" {
+  // 关联发现模块获取的目标列表, 关联到本地机器日志匹配
+  targets    = local.file_match.local_log_gz.targets
+  // 日志转发目的地（指向写入模块）
+  forward_to = [loki.write.default.receiver]
+  // 解压缩
+  decompression {
+    // 是否启用解压缩
+    enabled       = true
+    // 开始从新的压缩文件读取之前要等待的时间
+    initial_delay = "10s"
+    // 使用的压缩格式Gzip
+    format        = "gz"
+  }
+}
+
+
+// ========================
+// Loki 日志写入配置
+// ========================
+loki.write "default" {
+    // 将日志发送到的位置
+    endpoint {
+        // 要将日志发送到的完整 URL, Loki 接收端 API 地址
+        url       = "http://gateway:3100/loki/api/v1/push"
+        // 发送前要累积的最大日志批次大小
+        batch_size = "1MiB"
+        // 发送批次前要等待的最长时间
+        batch_wait = "1s"
+        // 多租户标识（生产环境建议动态获取）
+        tenant_id = "tenant1"
+    }
+    // 附加全局标签（当前为空配置）
+    external_labels = {}  
+}
