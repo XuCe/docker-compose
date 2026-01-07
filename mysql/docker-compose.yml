@@ -10,7 +10,7 @@ services:
       # 时区上海
       TZ: Asia/Shanghai
       # root 密码
-      MYSQL_ROOT_PASSWORD: dlf%p!asdja&a#t%f
+      MYSQL_ROOT_PASSWORD: 3QRHxYHBShmf3He&
       # 映射端口
     ports:
       - 3306:3306
